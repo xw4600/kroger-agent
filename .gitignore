@@ -1,0 +1,16 @@
+# Live data and secrets - never commit, but DO back these up separately.
+data/
+exports/
+*.env
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
