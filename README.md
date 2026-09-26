@@ -50,11 +50,13 @@ kroger store set --zip     # resolve locationId
 kroger store show
 kroger product lookup --upc 0001111041700   # exact lookup, authoritative price
 kroger cart test --upc ... --yes           # add one item (validation gate)
+kroger scrape orders --limit N --commit    # pull order history
+kroger scrape status | reset
 kroger db init | stats
 ```
 
-Not built yet: `ingest`, `resolve-upcs`, `due`, `propose`, `add`, `reconcile`,
-`export`. See "Roadmap" below.
+Not built yet: `ingest` (raw -> db), `resolve-upcs`, `due`, `propose`, `add`,
+`reconcile`, `export`. See "Roadmap" below.
 
 Output is a table on a TTY and JSON when piped, so the agent gets structured
 output without a flag.
@@ -77,25 +79,35 @@ uv run kroger auth login          # opens a browser, click Authorize
 uv run kroger doctor              # all checks should pass
 ```
 
-### 2. Gmail (for order history)
+### 2. Order history: scraping kroger.com
 
-The write-back loop reads your receipts from Gmail, so it needs
-`gmail.readonly`. **This is the one piece that needs Google Cloud setup**, and
-there is a catch:
-
-> If your OAuth consent screen is in **Testing** mode, Google expires refresh
-> tokens after **7 days**. `~/gmail-spam-manager` is in this state — its token
-> from Sep 1 is dead (`invalid_grant`).
-
-For a tool meant to run for years, publish the consent screen to **In production**
-(Google Cloud -> OAuth consent screen -> Publish app). A personal app with only
-your own account is fine; you do not need Google's verification for that.
-
-Then:
+Order history comes from `kroger.com/mypurchases` via Playwright.
 
 ```
-cp ~/gmail-spam-manager/client_secret.json data/gmail/
-cp ~/gmail-spam-manager/token.pickle     data/gmail/   # or re-consent
+uv run kroger scrape orders --limit 5 --commit
+```
+
+A browser window opens. **Log in there yourself** — the tool never sees or asks
+for your password. The login persists in `data/scrape/profile`, so this is a
+one-time step.
+
+The first run is `--commit`-gated on purpose: it captures raw receipt text to
+`data/scrape/raw/` and writes nothing to the database. We read the real format
+before writing a parser against a guess. Subsequent runs resume where they
+stopped, so `--limit 50` is fine.
+
+Things this deliberately does not do:
+
+- **No headless mode.** Kroger rejects headless sessions, and `headless_shell` is
+  trivially fingerprinted. `open_browser()` raises if you ask for it.
+- **No password handling.** You log in; we never touch credentials.
+- **No tight loops.** Randomised 2-8s delays and human-like scrolling. A session
+  that hammers the account gets the account throttled, which would defeat the
+  point.
+
+```
+uv run kroger scrape status     # progress
+uv run kroger scrape reset      # re-scrape already-captured orders
 ```
 
 ## Design notes
@@ -127,7 +139,9 @@ which the system follows your taste instead of accumulating a static list.
 ## Roadmap
 
 - [x] project scaffold, schema, identity resolution, doctor
-- [ ] `ingest gmail` + receipt parser (needs a real receipt to write against)
+- [x] Playwright scraper with raw capture, resume, and human pacing
+- [ ] receipt parser (blocked: needs one real captured receipt)
+- [ ] `ingest` raw scraped receipts into the database
 - [ ] `resolve-upcs` — name -> UPC via the Products API
 - [ ] `due` — cadence engine (median gap, modal qty, confidence, price check)
 - [ ] `propose` / `add` — approval-gated cart building

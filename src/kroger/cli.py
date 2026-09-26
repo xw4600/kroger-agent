@@ -257,6 +257,83 @@ def cmd_db(args) -> int:
     return 0
 
 
+# ─── scrape ──────────────────────────────────────────────────────────────────
+
+
+def cmd_scrape(args) -> int:
+    from . import scrape
+
+    if args.command == "status":
+        state = scrape.load_state()
+        urls = state.get("order_urls", [])
+        done = state.get("done", [])
+        payload = {
+            "order_urls_known": len(urls),
+            "orders_done": len(done),
+            "raw_files": len(list(scrape.raw_dir().glob("*.json"))),
+            "raw_dir": str(scrape.raw_dir()),
+            "profile_dir": str(scrape.profile_dir()),
+            "parsed": len(scrape.load_raw()),
+        }
+        lines = [
+            f"order urls known : {payload['order_urls_known']}",
+            f"orders scraped   : {payload['orders_done']}",
+            f"raw files on disk: {payload['raw_files']}",
+            f"raw directory    : {payload['raw_dir']}",
+            f"browser profile  : {payload['profile_dir']}",
+        ]
+        emit(payload, "\n".join(lines))
+        return 0
+
+    if args.command == "reset":
+        state = scrape.load_state()
+        n = len(state.get("done", []))
+        state["done"] = []
+        scrape.save_state(state)
+        emit({"cleared": n}, f"Cleared {n} completed marker(s). Files in raw/ kept.")
+        return 0
+
+    dry_run = not args.commit
+    try:
+        orders = scrape.run_scrape(max_orders=args.limit, dry_run=dry_run)
+    except scrape.ScrapePaused as exc:
+        emit({"ok": False, "error": str(exc)})
+        return 1
+    except RuntimeError as exc:
+        emit({"ok": False, "error": str(exc)})
+        return 1
+
+    payload = {
+        "scraped": len(orders),
+        "dry_run": dry_run,
+        "raw_dir": str(scrape.raw_dir()),
+        "orders": [
+            {
+                "date": o.order_date,
+                "number": o.order_number,
+                "type": o.order_type,
+                "total": o.total,
+                "chars": len(o.raw_text),
+                "upc_markers": o.raw_text.count("UPC"),
+            }
+            for o in orders
+        ],
+    }
+    if not orders:
+        emit(payload, "Nothing to scrape.")
+        return 0
+    lines = [f"{'date':<14}{'type':<10}{'total':>9}  upcs  chars"]
+    for o in orders:
+        lines.append(
+            f"{(o.order_date or '?'):<14}{(o.order_type or '?'):<10}"
+            f"{(o.total or '?'):>9}  {o.raw_text.count('UPC'):>4}  {len(o.raw_text)}"
+        )
+    lines.append(f"\nRaw receipts -> {payload['raw_dir']}")
+    lines.append("Nothing has been parsed or written to the database yet.")
+    emit(payload, "\n".join(lines))
+    return 0
+
+
 # ─── parser ──────────────────────────────────────────────────────────────────
 
 
@@ -303,6 +380,18 @@ def build_parser() -> argparse.ArgumentParser:
     ct.add_argument("--modality", default="DELIVERY", choices=["DELIVERY", "PICKUP"])
     ct.add_argument("--yes", action="store_true")
     ct.set_defaults(func=cmd_cart)
+
+    sc = sub.add_parser("scrape", help="scrape purchase history from kroger.com").add_subparsers(
+        dest="command", required=True
+    )
+    sl = sc.add_parser("orders", help="scrape order history (opens a browser)")
+    sl.add_argument("--limit", type=int, default=10, help="max orders (default 10)")
+    sl.add_argument(
+        "--commit", action="store_true", help="actually scrape (default is a dry run)"
+    )
+    sl.set_defaults(func=cmd_scrape)
+    sc.add_parser("status", help="show scraping progress").set_defaults(func=cmd_scrape)
+    sc.add_parser("reset", help="clear completed markers to re-scrape").set_defaults(func=cmd_scrape)
 
     d = sub.add_parser("db", help="database utilities").add_subparsers(
         dest="command", required=True

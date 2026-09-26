@@ -9,6 +9,9 @@ dependencies = [
     "google-api-python-client>=2.140",
     "google-auth-oauthlib>=1.2",
     "python-dotenv>=1.0",
+    # Pinned to the revision whose browser bundle is already on disk
+    # (chromium-1234). Loosening this triggers a fresh browser download.
+    "playwright==1.62.0",
 ]
 
 [project.scripts]
